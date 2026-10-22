@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.positai
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+data/raw/*
+output/rds/*
+output/figures/*
+output/reports/*
+!*/.gitkeep
+*_cache/

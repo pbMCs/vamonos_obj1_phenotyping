@@ -11,5 +11,8 @@ data/raw/*
 output/rds/*
 output/figures/*
 output/reports/*
+data/after_fsom/*
+data/after QC/Panel A*
+data/after QC/Panel B*
 !*/.gitkeep
 *_cache/

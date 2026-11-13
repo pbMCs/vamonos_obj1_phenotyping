@@ -1,0 +1,529 @@
+---
+title: "Vamonos Obj1B Phenotyping Post-Clustering analysis"
+author: "Mar"
+date: "`r Sys.Date()`"
+editor_options:
+  chunk_output_type: console
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+source(here::here("R", "00_setup.R"))
+```
+
+Once the clustering and metaclustering and UMAPs are done, and clusters are named, we can proceed to the analysis of the frequencies of each metacluster between the different sample groups, as well as differences in the MFI of the markers
+
+```{r}
+
+fsom_PA_up<- readRDS(file= file.path(paths$rds,"fsom_PA_allmarkers_renamed_20261107.RDS"))
+fsom_PB_up<- readRDS(file= file.path(paths$rds,"fsom_PB_allmarkers_renamed_20261107.RDS"))
+
+#extract the counts of each metacluster within each sample, calculate the proportions and the center-log-ratio to compare them
+#this function extracts the SAMPLE ID of each cell of the flowsom object
+
+meta_PA <- readRDS(file.path(paths$metadata, "metadata_PA_20261102.rds"))
+meta_PB <- readRDS(file.path(paths$metadata, "metadata_PB_20261102.rds"))
+
+meta_PA$antiCSP_M3 <- factor(meta_PA$antiCSP_M3,
+                                 levels = c("Low", "High", "Control"))   
+meta_PA$sex <- factor(meta_PA$sex,
+                                 levels = c("F", "M"))   
+meta_PB$antiCSP_M3 <- factor(meta_PB$antiCSP_M3,
+                                 levels = c("Low", "High", "Control"))   
+meta_PB$sex <- factor(meta_PB$sex,
+                                 levels = c("F", "M"))   
+
+meta_PA <- tibble::rownames_to_column(meta_PA, var = "file_name")
+meta_PB<- tibble::rownames_to_column(meta_PB, var = "file_name")`
+
+```
+
+```{r}
+
+cell_file <- function(fsom) {
+  md <- fsom$metaData
+  md <- md[order(sapply(md, `[`, 1))]                 
+  lens <- sapply(md, function(r) r[2] - r[1] + 1)
+  rep(names(md), times = lens)
+}
+
+counts_PA_up <- tibble(file = cell_file(fsom_PA_up),
+                 metacluster = factor(GetMetaclusters(fsom_PA_up))) %>%
+  count(file, metacluster, .drop = FALSE) %>%               
+  left_join(meta_PA, by = c("file" = "file_name"))
+
+#dataframe showing the total cells coming from each sample in the flowsom, not used later but to check for consistency
+
+total_counts_PA_up<- counts_PA_up %>% group_by(file) %>% summarise(total = sum(n)) 
+
+#remove the control group to not include them in the comparisons
+
+counts_PA_up <- counts_PA_up %>% dplyr::filter(antiCSP_M3 %in% c("High", "Low")) %>%
+  mutate(antiCSP_M3 = droplevels(factor(antiCSP_M3)))
+
+#calculate the proportions of each metacluster in each individual and the center log ratio
+#adding 0.5 in the counts in order to not have 0 values that cannot be log transformed
+
+props_PA_up <- counts_PA_up %>%
+  complete(file, metacluster, fill = list(n = 0)) %>%   
+  group_by(file) %>%
+  mutate(prop     = n / sum(n),
+         percent  = 100 * prop,
+         prop_adj = (n + 0.5) / sum(n + 0.5),
+         clr      = log(prop_adj) - mean(log(prop_adj))) %>%
+  ungroup()
+
+#compare the frequencies or CLR-transformed frequencies of each metacluster between High and Low responders
+#later in the plotting function the wilcoxon test is applied again, this is only to check the results of the comparisons
+
+res_PA_up <- props_PA_up %>%
+  group_by(metacluster) %>%
+  summarise(
+    n_high = sum(antiCSP_M3 == "High"),
+    n_low  = sum(antiCSP_M3 == "Low"),
+    median_clr_high = median(clr[antiCSP_M3 == "High"]),
+    median_clr_low  = median(clr[antiCSP_M3 == "Low"]),
+    p = wilcox.test(clr ~ antiCSP_M3, exact = FALSE)$p.value,
+    .groups = "drop") %>%
+  mutate(p_adj = p.adjust(p, method = "BH")) %>%
+  arrange(p)
+
+# create labels for the n of each group
+
+n_per_group_PA <- props_PA_up %>% distinct(file, antiCSP_M3) %>% count(antiCSP_M3)
+lab_PA <- setNames(paste0(n_per_group_PA$antiCSP_M3, "\n(n = ", n_per_group_PA$n, ")"),
+                n_per_group_PA$antiCSP_M3)
+
+#same analysis for the panel B data
+
+counts_PB_up <- tibble(file = cell_file(fsom_PB_up),
+                 metacluster = factor(GetMetaclusters(fsom_PB_up))) %>%
+  count(file, metacluster, .drop = FALSE) %>%               
+  left_join(meta_PB, by = c("file" = "file_name"))
+
+#dataframe showing the total cells coming from each sample in the flowsom, not used later but to check for consistency
+
+total_counts_PB_up<- counts_PB_up %>% group_by(file) %>% summarise(total = sum(n)) 
+
+#remove the control group to not include them in the comparisons
+
+counts_PB_up <- counts_PB_up %>% dplyr::filter(antiCSP_M3 %in% c("High", "Low")) %>%
+  mutate(antiCSP_M3 = droplevels(factor(antiCSP_M3)))
+
+props_PB_up <- counts_PB_up %>%
+  complete(file, metacluster, fill = list(n = 0)) %>%   # add missing combos as 0
+  group_by(file) %>%
+  mutate(prop     = n / sum(n),
+         percent  = 100 * prop,
+         prop_adj = (n + 0.5) / sum(n + 0.5),
+         clr      = log(prop_adj) - mean(log(prop_adj))) %>%
+  ungroup()
+
+
+#compare the frequencies or CLR-transformed frequencies of each metacluster between High and Low responders
+#later in the plotting function the wilcoxon test is applied again, this is only to check the results of the comparisons
+
+res_PB_up <- props_PB_up %>%
+  group_by(metacluster) %>%
+  summarise(
+    n_high = sum(antiCSP_M3 == "High"),
+    n_low  = sum(antiCSP_M3 == "Low"),
+    median_clr_high = median(clr[antiCSP_M3 == "High"]),
+    median_clr_low  = median(clr[antiCSP_M3 == "Low"]),
+    p = wilcox.test(clr ~ antiCSP_M3, exact = FALSE)$p.value,
+    .groups = "drop") %>%
+  mutate(p_adj = p.adjust(p, method = "BH")) %>%
+  arrange(p)
+
+# create labels for the n of each group
+
+n_per_group_PB_up <- props_PB_up %>% distinct(file, antiCSP_M3) %>% count(antiCSP_M3)
+lab_PB <- setNames(paste0(n_per_group_PB_up$antiCSP_M3, "\n(n = ", n_per_group_PB_up$n, ")"),
+                n_per_group_PB_up$antiCSP_M3)
+
+#plot boxplots comparing frequencies of each metacluster between high and low responders
+
+props_PB_up$antiCSP_M3 <- factor(
+  props_PB_up$antiCSP_M3,
+  levels = c("High", "Low")
+)
+
+props_PA_up$antiCSP_M3 <- factor(
+  props_PA_up$antiCSP_M3,
+  levels = c("High", "Low")
+)
+
+group_cols <- c(
+  "High" = "#F8766D",
+  "Low"  = "#00BFC4"
+)
+
+#generate the boxplots comparing either the percentage or the CLR-transformed frequencies of the metaclusters between groups (you need to change it manually) 
+
+ggplot(props_PA_up, aes(antiCSP_M3, percent, fill = antiCSP_M3)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) +
+  geom_jitter(aes(colour = antiCSP_M3),
+              width = 0.1, size = 1.5) +
+  stat_compare_means(
+    comparisons = list(c("High", "Low")),
+    method = "wilcox.test",
+    method.args = list(exact = FALSE),
+    label = "p.format",
+    tip.length = 0.02,
+    vjust = -0.2
+  ) +
+  scale_x_discrete(labels = lab_PA, limits = c("High", "Low")) +
+  scale_fill_manual(values = group_cols) +
+  scale_colour_manual(values = group_cols) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+  facet_wrap(~ metacluster, scales = "free_y") +
+  labs(
+    y = "Frequency of metacluster",
+    x = NULL,
+    caption = "Wilcoxon rank-sum test, unadjusted p-values"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+ggplot(props_PB_up, aes(antiCSP_M3, percent, fill = antiCSP_M3)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) +
+  geom_jitter(aes(colour = antiCSP_M3),
+               width = 0.1, size = 1.5) +
+  stat_compare_means(
+    comparisons = list(c("High", "Low")),
+    method = "wilcox.test",
+    method.args = list(exact = FALSE),
+    label = "p.format",
+    tip.length = 0.02,
+    vjust = -0.2
+  ) +             
+
+  scale_x_discrete(labels = lab_PB, limits = c("High", "Low")) +
+  scale_fill_manual(values = group_cols) +
+  scale_colour_manual(values = group_cols) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+  facet_wrap(~ metacluster, scales = "free_y") +
+  labs(
+    y = "Frequency of metacluster",
+    x = NULL,
+    caption = "Wilcoxon rank-sum test, unadjusted p-values"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+#Calculate the median fluorescence intensity of each marker in each metacluster for each sample
+
+sample_medians <- function(fsom, mclusters=NULL, meta_table, group_var = "antiCSP_M3",
+                           levels_keep = c("High", "Low"),
+                           channels = unname(fsom$map$colsUsed), min_cells = 0,
+                           label_map = NULL) {
+
+  if (is.null(label_map)) {
+    cu <- fsom$map$colsUsed
+    label_map <- setNames(sub("-A$", "", names(cu)), unname(cu))
+  }
+
+if (is.null(mclusters)) {
+    mc <- FlowSOM::GetMetaclusters(fsom)
+  }
+  
+  as_tibble(fsom$data[, channels, drop = FALSE]) %>%
+    mutate(file = cell_file(fsom), metacluster = factor(mc)) %>%
+    group_by(file, metacluster) %>%
+    dplyr::filter(n() >= min_cells) %>%
+    summarise(n_cells = n(), across(all_of(channels), median), .groups = "drop") %>%
+    left_join(meta_table, by = c("file" = "file_name")) %>%
+    mutate(group = factor(.data[[group_var]], levels = levels_keep)) %>%
+    dplyr::filter(!is.na(group)) %>%
+    pivot_longer(all_of(channels), names_to = "marker", values_to = "value") %>%
+    mutate(marker = factor(dplyr::recode(marker, !!!label_map),
+                           levels = unname(label_map[channels])))      
+}
+
+med_PA <- sample_medians(fsom_PA_up, meta_table= meta_PA)
+med_PB <- sample_medians(fsom_PB_up, meta_table=meta_PB)
+
+#calculate the median of the MFIs or each marker within each metacluster in both sample groups and compare them
+
+test_one <- function(d) {
+  n_h <- sum(d$group == "High"); n_l <- sum(d$group == "Low")
+  if (n_h < 3 || n_l < 3) return(tibble(n_high = n_h, n_low = n_l, diff = NA_real_, p = NA_real_))
+  tibble(n_high = n_h, n_low = n_l,
+         diff = median(d$value[d$group == "High"]) - median(d$value[d$group == "Low"]),
+         p    = wilcox.test(value ~ group, data = d, exact = FALSE)$p.value)
+}
+
+res_PA <- med_PA %>%
+  group_by(metacluster, marker) %>%
+  group_modify(~ test_one(.x)) %>%
+  ungroup() %>%
+  mutate(fdr = p.adjust(p, method = "BH")) %>%
+  arrange(p)
+
+res_PB <- med_PB %>%
+  group_by(metacluster, marker) %>%
+  group_modify(~ test_one(.x)) %>%
+  ungroup() %>%
+  mutate(fdr = p.adjust(p, method = "BH")) %>%
+  arrange(p)
+
+res_PA
+res_PB
+
+#plot a heatmap showing the difference in MFI between high and low for each metacluster and marker and the significant differences
+
+plot_diff_heatmap <- function(res, axis_size = 14, star_size = 8, p_cut = 0.05, fdr_cut = 0.05) {
+  res %>%
+    mutate(sig = case_when(fdr < fdr_cut ~ "**",      
+                           p   < p_cut   ~ "*",       
+                           TRUE          ~ "")) %>%
+    ggplot(aes(metacluster, marker, fill = diff)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = sig), size = star_size, fontface = "bold", vjust = 0.75) +
+    scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", na.value = "grey90") +
+    labs(x = "Metacluster", y = NULL, fill = "high − low\n(median)",
+         caption = "* p < 0.05 (unadjusted); ** FDR < 0.05") +
+    theme_minimal(base_size = axis_size) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = axis_size),
+          axis.text.y = element_text(size = axis_size),
+          legend.title = element_text(size = axis_size),
+          legend.text  = element_text(size = axis_size - 2),
+          panel.grid = element_blank())
+}
+
+plot_diff_heatmap(res_PA, axis_size=16, star_size = 10)
+plot_diff_heatmap(res_PB, axis_size=16, star_size = 10)
+
+#plot the boxplots of the MFI differences between the two groups as boxplots (only the combinations with a significant pvalue)
+
+plot_sig_boxplots <- function(med, res, p_cut = 0.05,
+                              ncol = 4, free_y = TRUE) {
+
+  group_cols <- c(
+    "High" = "#F8766D",
+    "Low"  = "#00BFC4"
+  )
+
+  hits <- res %>%
+    dplyr::filter(!is.na(p), p < p_cut) %>%
+    arrange(metacluster, marker) %>%
+    mutate(label = paste0(metacluster, " · ", marker,
+                          "\np = ", signif(p, 2),
+                          " (FDR = ", signif(fdr, 2), ")"))
+
+  dat <- med %>%
+    inner_join(hits %>% select(metacluster, marker, label),
+               by = c("metacluster", "marker")) %>%
+    mutate(
+      label = factor(label, levels = hits$label),
+      group = factor(group, levels = c("High", "Low"))
+    )
+
+  ggplot(dat, aes(group, value, fill = group)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.5) +
+    geom_jitter(aes(colour = group),
+                width = 0.12, height = 0, size = 1.8) +
+    scale_fill_manual(values = group_cols) +
+    scale_colour_manual(values = group_cols) +
+    facet_wrap(~ label, ncol = ncol,
+               scales = if (free_y) "free_y" else "fixed") +
+    labs(x = NULL, y = "Median expression per sample (logicle)",
+         caption = paste0("Wilcoxon rank-sum test; panels shown have unadjusted p < ",
+                          p_cut)) +
+    theme_bw() +
+    theme(legend.position = "none")
+}
+
+plot_sig_boxplots(med_PA, res_PA)
+plot_sig_boxplots(med_PB, res_PB)
+
+#plot histograms showing the fluorescence intensities and counts for each marker and metaclusters, split between two sample groups, and the MFIs of each group as dashed lines
+
+plot_marker_hist <- function(df, marker, group_col = "responder_group",
+                             facet_by = NULL,         
+                             bins = 100,
+                             colours = c(High = "#F8766D", Low = "#00BFC4"),
+                             show_median = TRUE,         
+                             clip = c(0.001, 0.999),     
+                             ncol = NULL,
+                             title = NULL,
+                             save_path = NULL,
+                             y_scales = c("free_y", "fixed"), 
+                             panel_width = 3.5, panel_height = 3, dpi = 300) {
+  
+  stopifnot(length(marker) == 1, marker %in% names(df))
+  y_scales <- match.arg(y_scales)
+  
+  d <- df[!is.na(df[[group_col]]) & !is.na(df[[marker]]), ]
+  d$.grp <- droplevels(as.factor(d[[group_col]]))
+  d$.x   <- d[[marker]]
+  if (!is.null(facet_by)) d$.facet <- as.factor(d[[facet_by]])
+ 
+  xr <- quantile(d$.x, clip, na.rm = TRUE)
+  
+  med <- d %>%
+    group_by(across(any_of(c(".grp", ".facet")))) %>%
+    summarise(med = median(.x), .groups = "drop")
+
+  p <- ggplot(d, aes(.x, fill = .grp, colour = .grp)) +
+    geom_histogram(aes(y = after_stat(count)), bins = bins,
+                   position = "identity", alpha = 0.35, linewidth = 0.4) +
+    scale_fill_manual(values = colours, name = NULL) +
+    scale_colour_manual(values = colours, name = NULL) +
+    coord_cartesian(xlim = xr) +
+    labs(x = marker, y = "Counts",
+         title = if (is.null(title)) marker else title) +
+    theme_bw() +
+    theme(strip.background = element_rect(fill = "grey90"),
+          plot.title = element_text(face = "bold"),
+          panel.grid = element_blank())
+  
+  if (show_median) {
+    p <- p + geom_vline(data = med, aes(xintercept = med, colour = .grp),
+                        linetype = "dashed", linewidth = 0.6, show.legend = FALSE)
+  }
+  
+  n_col <- 1; n_row <- 1
+  if (!is.null(facet_by)) {
+    n_f <- nlevels(d$.facet)
+    if (is.null(ncol)) ncol <- ceiling(sqrt(n_f))
+    p <- p + facet_wrap(~ .facet, ncol = ncol, scales=y_scales, axes = "all")
+    n_col <- min(ncol, n_f); n_row <- ceiling(n_f / ncol)
+  }
+    if (!is.null(save_path)) {
+    ggsave(save_path, p, width = panel_width * n_col + 1.2,
+           height = panel_height * n_row, dpi = dpi, limitsize = FALSE)
+  }
+  
+  p
+}
+
+plot_marker_hist(umap_PA, "S100A8", group_col = "antiCSP_M3", facet_by = "metacluster_label")
+plot_marker_hist(umap_PB, "CCR1", group_col = "antiCSP_M3", facet_by = "metacluster_label")
+
+```
+
+```{r}
+
+#split flowsom into groups to visualize the differences in MFI between metaclusters
+#first we need to add the necessary metadata to the flowsom object
+
+metadata_fsom_PA<- fsom_PA_up$metaData
+
+n_cells_PA <- max(sapply(metadata_fsom_PA, "[", 2))
+
+# Initialize cell-level metadata
+cell_metadata_PA <- data.frame(
+  Cell_Index = seq_len(n_cells_PA),
+  Sample_ID = NA_character_
+)
+
+# Assign sample IDs using the FlowSOM cell ranges
+for (sample in names(metadata_fsom_PA)) {
+
+  indices <- metadata_fsom_PA[[sample]]
+
+  cell_metadata_PA$Sample_ID[
+    indices[1]:indices[2]
+  ] <- sample
+}
+
+cell_metadata_PA <- cell_metadata_PA %>%
+  left_join(
+    meta_PA,
+    by = c("Sample_ID" = "file_name")
+  )
+
+high_ids_PA <- which(cell_metadata_PA$antiCSP_M3 == "High")
+
+low_ids_PA <- which(cell_metadata_PA$antiCSP_M3 == "Low")
+
+fsom_PA_high <- FlowSOM::FlowSOMSubset(fsom_PA_up, ids = high_ids_PA)
+
+fsom_PA_low <- FlowSOM::FlowSOMSubset(fsom_PA_up, ids = low_ids_PA)
+
+metadata_fsom_PB<- fsom_PB_up$metaData
+
+n_cells_PB <- max(sapply(metadata_fsom_PB, "[", 2))
+
+cell_metadata_PB <- data.frame(
+  Cell_Index = seq_len(n_cells_PB),
+  Sample_ID = NA_character_
+)
+
+for (sample in names(metadata_fsom_PB)) {
+
+  indices <- metadata_fsom_PB[[sample]]
+
+  cell_metadata_PB$Sample_ID[
+    indices[1]:indices[2]
+  ] <- sample
+}
+
+cell_metadata_PB <- cell_metadata_PB %>%
+  left_join(
+    meta_PB,
+    by = c("Sample_ID" = "file_name")
+  )
+
+high_ids_PB <- which(cell_metadata_PB$antiCSP_M3 == "High")
+
+low_ids_PB <- which(cell_metadata_PB$antiCSP_M3 == "Low")
+
+fsom_PB_high <- FlowSOM::FlowSOMSubset(fsom_PB_up, ids = high_ids_PB)
+
+fsom_PB_low <- FlowSOM::FlowSOMSubset(fsom_PB_up, ids = low_ids_PB)
+
+#scatter plots of the different metaclusters in high vs low responders
+
+plot_metaclusters <- function(fsom, channelpair, density = FALSE,
+                              seed = 42, ncells = 3000) {
+
+  mcs <- sort(unique(as.character(GetMetaclusters(fsom))))   
+  mcs_num <- suppressWarnings(as.numeric(mcs))
+  if (!anyNA(mcs_num)) mcs <- as.character(sort(mcs_num))  
+
+  plots <- lapply(mcs, function(mc) {
+    set.seed(seed)                                  
+    p <- Plot2DScatters(fsom,
+                        channelpairs = list(channelpair),
+                        metaclusters = list(if (!is.na(suppressWarnings(as.numeric(mc)))) as.numeric(mc) else mc),
+                        plotFile = NULL,
+                        maxBgPoints= ncells)
+    p[[1]] + ggtitle(paste("Metacluster", mc))
+  })
+  names(plots) <- mcs
+  plots
+}
+
+CD14CD16<- c("BV421-A", "BV570-A")
+CCR2Slan<- c("APC_Fire 750-A", "VioBlue-A")
+FCER1CD16<- c("BUV615-A", "BV421-A")
+CD36CD16<- c("BV605-A", "BV421-A")
+CD89CD16<- c("BUV496-A", "BV421-A")
+CD163CD16<- c("BUV395-A", "BV421-A")
+CD35CD16<- c("BUV563-A", "BV421-A")
+S100CD16<- c("Alexa Fluor 647-A", "BV421-A")
+
+CD40CD16<- c("PE_Fire 810-A", "BV421-A")
+CXCR4CD16<- c("BV785-A", "BV421-A")
+CD11bactCD16<- c("PE_Dazzle 594-A", "BV421-A")
+CD86CD16<- c("RY610-A", "BV421-A")
+CCR1CD16<- c("PE-Cy7-A", "BV421-A")
+
+plots_PA<-plot_metaclusters(fsom_PA_low,S100CD16)
+wrap_plots(plots_PA, ncol = 4)    
+
+plots_PB<-plot_metaclusters(fsom_PB_high,CCR1CD16)
+wrap_plots(plots_PB, ncol = 4)    
+
+```

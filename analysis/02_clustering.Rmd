@@ -1,33 +1,705 @@
 ---
-title: "02_clustering"
-output: html_document
- toc: true
+title: "Vamonos Obj1B Phenotyping Clustering"
+author: "Mar"
+date: "`r Sys.Date()`"
+editor_options:
+  chunk_output_type: console
+output:
+  html_document:
+    toc: true
+    toc_float: true
     code_folding: hide
     self_contained: true
-date: "2026-10-22"
 ---
 
-``````{r setup, include=FALSE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 source(here::here("R", "00_setup.R"))
 ```
 
-## R Markdown
+## Clustering
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+After transforming the fcs files stained with both panels and verifying all parameters look okay, we can proceed to the clustering
+Choose the parameters to cluster on for each panel
+Load the transformed, unmixed and with updated metadata gatingsets obtained from the 01_QC_cleanup script
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
 
-```{r cars}
-summary(cars)
+path_PA_gs<- file.path(paths$afterqc, "/Panel A")
+path_PB_gs<- file.path(paths$afterqc, "/Panel B")
+
+PA_GatingSet_t<- load_gs(path_PA_gs)
+PB_GatingSet_t<- load_gs(path_PB_gs)
+
+#create different marker lists with the different markers that we might want to use for clustering
+
+backbone_markers<- c("TLR2-A","CD14-A", "CD16-A", "CCR2-A","CX3CR1-A", "Slan-A")
+markers_PA<- c("TLR2-A","CD11b-A", "CD14-A", "CD16-A", "CD32-A", "CD35-A", "CD36-A", "CD64-A", "CD89-A", "CD163-A", "BAFF-A", "CCR2-A",
+               "CX3CR1-A", "FcER1-A", "HLA-DR-A", "S100A8-A", "Slan-A")
+markers_PB<- c("TLR2-A","CD14-A", "CD16-A", "CCR2-A","CX3CR1-A", "Slan-A", "CD11b act-A", "CD40-A", "CD54-A", "CD62L-A", "CD86-A", "CCR1-A", "CXCR4-A",
+               "PD-1-A", "PD-L1-A", "TLR4-A")
+
+#convert gatingsets to flowsets for the clustering
+
+cytoset_PA_t<- gs_pop_get_data(PA_GatingSet_t, "root")
+flowset_PA_t<- cytoset_to_flowSet(cytoset_PA_t)
+
+#check and/or store the number of cells in each fcs file
+
+fsApply(flowset_PA_t, nrow)
+
+cytoset_PB_t<- gs_pop_get_data(PB_GatingSet_t, "root")
+flowset_PB_t<- cytoset_to_flowSet(cytoset_PB_t)
+
+fsApply(flowset_PB_t, nrow)
+
+#obtain and save the metadata stored in the flowset, because the FlowSOM does not store any more information than the file name
+
+meta_PA <- pData(flowset_PA_t)    
+meta_PB <- pData(flowset_PB_t)
+
+saveRDS(meta_PA, file.path(paths$metadata, "metadata_PA_20261102.rds"))
+saveRDS(meta_PB, file.path(paths$metadata, "metadata_PB_20261102.rds"))
+
+#obtain parameter and channel names and correspondence (for the FlowSOM clustering, channels need to be used)
+
+pd_PA <- pData(parameters(flowset_PA_t[[1]]))
+pd_PA[, c("name", "desc")]      
+
+channels_PA <- pd_PA$name[match(markers_PA, pd_PA$desc)]
+channels_PA     
+
+pd_PB <- pData(parameters(flowset_PB_t[[1]]))
+pd_PB[, c("name", "desc")]      
+
+channels_PB <- pd_PB$name[match(markers_PB, pd_PB$desc)]
+channels_PB     
+
+pd_PA <- pData(parameters(flowset_PA_t[[1]]))
+label_map_PA <- setNames(pd_PA$desc, pd_PA$name)      
+label_map_PA <- label_map_PA[names(label_map_PA) %in% channels_PA]
+
+pd_PB <- pData(parameters(flowset_PB_t[[1]]))
+label_map_PB <- setNames(pd_PB$desc, pd_PB$name)      
+label_map_PB <- label_map_PB[names(label_map_PB) %in% channels_PB]
+
+saveRDS(label_map_PA, file.path(paths$metadata, "labelmap_PA.RDS"))
+saveRDS(label_map_PB, file.path(paths$metadata, "labelmap_PB.RDS"))
+
+rm(PA_GatingSet_t, PB_GatingSet_t, cytoset_PA_t, cytoset_PB_t, pd_PA, pd_PB)
+gc()
+
 ```
 
-## Including Plots
+For the FlowSOM clustering, the number of clusters by default is 100 (a grid of 10x10), and the number of metaclusters will depend on how many populations you are expecting
 
-You can also embed plots, for example:
+```{r}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+fsom_PA<- readRDS(file.path(paths$rds, "fsom_PA_allmarkers_15MC_20261030.RDS"))
+fsom_PB<- readRDS(file.path(paths$rds, "fsom_PB_allmarkers_15MC_20261103.RDS"))
+
+fsom_PA <- FlowSOM(flowset_PA_t,
+                colsToUse = markers_PA,
+                scale     = FALSE,     
+                xdim = 10, ydim = 10,
+                nClus = 15,            
+                seed  = 42)
+
+fsom_PB <- FlowSOM(flowset_PB_t,
+                colsToUse = markers_PB,
+                scale     = FALSE,     
+                xdim = 10, ydim = 10,
+                nClus = 15,            
+                seed  = 42)
+
+
+# PlotStars(fsom_PA, backgroundValues = fsom_PA$metaclustering,  maxNodeSize = 2,
+#           title= "Metaclusters Panel A All markers")
+
+# PlotStars(fsom_PB, backgroundValues = fsom_PB$metaclustering, 
+#            maxNodeSize = 2,
+#           title= "Metaclusters Panel B All markers")
+
+FlowSOMmary(fsom_PA,
+             plotFile = "fsom_PA_summary_allmarkers_15MC_NEWEXP_20261105.pdf")
+# 
+# 
+# FlowSOMmary(fsom_PB,
+#           plotFile = "fsom_PB_summary_allmarkers_15MC_20261103.pdf")
+
+#plot the heatmap that is included in the flowsommary report, I modified the automatic function in order to be able to plot both the scaled and non-scaled values
+
+PlotMFIHeatmap_mc <- function(fsom, scale = c("zscore", "none", "minmax"),
+                              heatmapColors = c("#313695", "#4575B4", "#74ADD1", "#ABD9E9", "#E0F3F8",
+                                                "#FEE090", "#FDAE61", "#F46D43", "#D73027", "#A50026"),
+                              cluster_rows = FALSE, cluster_columns = FALSE, labels = TRUE) {
+  scale <- match.arg(scale)
+  fsom  <- FlowSOM::UpdateFlowSOM(fsom)
+
+  mfi <- FlowSOM::GetMetaclusterMFIs(fsom, colsUsed = TRUE, prettyColnames = TRUE)  
+
+  mat <- t(switch(scale,
+    zscore = base::scale(mfi),                                              
+    none   = mfi,                                                           
+    minmax = apply(mfi, 2, function(x) (x - min(x)) / (max(x) - min(x)))))  
+  raw <- t(mfi)                                                            
+
+  cols_mc <- setNames(scales::hue_pal()(ncol(mat)), colnames(mat))          # ggplot default colours
+  mc_df   <- data.frame(metaclustering = factor(colnames(mat), levels = colnames(mat)))
+  mc_a <- ComplexHeatmap::HeatmapAnnotation(df = mc_df, col = list(metaclustering = cols_mc),
+                                            border = TRUE, show_legend = FALSE)
+
+  ComplexHeatmap::Heatmap(mat, col = heatmapColors,
+    cluster_rows = cluster_rows, cluster_columns = cluster_columns,
+    show_column_names = TRUE, column_names_side = "top",
+    bottom_annotation = mc_a, border = TRUE,
+    name = switch(scale, zscore = "z-score", none = "MFI", minmax = "0-1"),
+    cell_fun = if (labels) function(j, i, x, y, w, h, col)
+      grid::grid.text(round(raw[i, j], 2), x, y) else NULL)
+}
+
+
+fsom_PA_notscaled<- PlotMFIHeatmap_mc(fsom_PA, scale = "none", cluster_rows= TRUE, cluster_columns= TRUE)     
+fsom_PA_scaled<- PlotMFIHeatmap_mc(fsom_PA, scale = "zscore", cluster_rows= TRUE, cluster_columns= TRUE)     
+
+fsom_PB_notscaled<- PlotMFIHeatmap_mc(fsom_PB, scale = "none", cluster_rows= TRUE, cluster_columns= TRUE)     
+fsom_PB_scaled<- PlotMFIHeatmap_mc(fsom_PB, scale = "zscore", cluster_rows= TRUE, cluster_columns= TRUE)     
+
+
+# test<- c("BV570-A" = "high", "BV421-A" = "low")
+# QueryStarPlot(fsom_PA, test)
+
+# 
+# #save the final FlowSOM objects to not run the clustering each time
+# 
+# saveRDS(fsom_PA, file= file.path(paths$rds,"fsom_PA_allmarkers_15MC_20261030.RDS"))
+# saveRDS(fsom_PB, file= file.path(paths$rds,"fsom_PB_allmarkers_15MC_20261103.RDS"))
+
+rm(flowset_PA_t, flowset_PB_t)
+gc()
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+``` {r}
+#obtain the metacluster labelling for each cell and the MFIs of the different markers in each of the metaclusters
+
+# fsom_PA<-readRDS(file= file.path(paths$rds,"fsom_PA_allmarkers_15MC_20261030.RDS"))
+# fsom_PB<- readRDS(file= file.path(paths$rds,"fsom_PB_allmarkers_15MC_20261030.RDS"))
+
+#various functions to extract the information on the cluster and metacluster to which each cell belongs,
+#as well as the MFI of the different channels for each cluster or metacluster
+
+mclusters_PA <- GetMetaclusters(fsom_PA)
+mclusters_PB <- GetMetaclusters(fsom_PB)
+
+clusters_PA<- GetClusters(fsom_PA)
+clusters_PB<- GetClusters(fsom_PB)
+
+mclusters_PA_MFI<- GetMetaclusterMFIs(fsom_PA)
+mclusters_PB_MFI<- GetMetaclusterMFIs(fsom_PB)
+
+#function to plot the clusters and metaclusters in a 2D scatter plot of the different marker combinations
+
+plot_metaclusters <- function(fsom, channelpair, density = FALSE,
+                              seed = 42, ncells = 3000) {
+
+  mcs <- sort(unique(as.character(GetMetaclusters(fsom))))   
+  mcs_num <- suppressWarnings(as.numeric(mcs))
+  if (!anyNA(mcs_num)) mcs <- as.character(sort(mcs_num))  
+
+  plots <- lapply(mcs, function(mc) {
+    set.seed(seed)                                  
+    p <- Plot2DScatters(fsom,
+                        channelpairs = list(channelpair),
+                        metaclusters = list(if (!is.na(suppressWarnings(as.numeric(mc)))) as.numeric(mc) else mc),
+                        plotFile = NULL,
+                        maxBgPoints= ncells)
+    p[[1]] + ggtitle(paste("Metacluster", mc))
+  })
+  names(plots) <- mcs
+  plots
+}
+
+scatter<- c("FSC-A", "SSC (Violet)-A")
+TLR2<- c("RY586-A", "FSC-A")
+CD14CD16<- c("BV421-A", "BV570-A")
+CCR2CX3CR1<- c("APC_Fire 750-A", "BUV737-A")
+CCR2Slan<- c("APC_Fire 750-A", "VioBlue-A")
+HLADRCD16<- c("BV480-A", "BV421-A")
+S100CD16<- c("Alexa Fluor 647-A", "BV421-A")
+CD163CD16<- c("BUV395-A", "BV421-A")
+CD32CD16<- c("BUV805-A", "BV421-A")
+TLR2CD16<-  c("RY586-A", "BV421-A")
+CD35CD16<- c("BUV563-A", "BV421-A")
+CXCR4CD40<- c("BV785-A", "PE_Fire 810-A")
+FCER1CD16<- c("BUV615-A", "BV421-A")
+HLADRCD11b<- c("BV480-A", "BV650-A")
+BAFFS100<- c("PE-Cy5.5-A", "Alexa Fluor 647-A")
+CD36CD16<- c("BV605-A", "BV421-A")
+CD86CD16<- c("RY610-A", "BV421-A")
+CCR1CD16<- c("PE-Cy7-A", "BV421-A")
+CD54CD16<- c("RB780-A", "BV421-A")
+CD11bactCD16<- c("PE_Dazzle 594-A", "BV421-A")
+TLR4ctCD16<- c("RB744-A", "BV421-A")
+PD1CD16<- c("BV750-A", "BV421-A")
+PDL1CD16<- c("RB705-A", "BV421-A")
+
+plots_PA<-plot_metaclusters(fsom_PA, CD36CD16)
+wrap_plots(plots_PA, ncol = 4)    
+
+plots_PB<-plot_metaclusters(fsom_PB,PDL1CD16)
+wrap_plots(plots_PB, ncol = 4)  
+
+```
+
+```{r}
+#for the UMAP, we want to extract the metadata of each cell that is stored in the flowsom object
+#the cell_file function extracts the information on which cells belong to each sample, for example 
+#sample 1 goes from cell 1 to cell 67792, so the function extracts these indices and calculates the number of cells in each file
+#the result is an object where each row is a cell and the name of the sample is repeated the amount of times as cells has that file
+
+cell_file <- function(fsom) {
+  md <- fsom$metaData
+  md <- md[order(sapply(md, `[`, 1))]                 
+  lens <- sapply(md, function(r) r[2] - r[1] + 1)
+  rep(names(md), times = lens)
+}
+
+file_PA <- cell_file(fsom_PA)
+file_PB<- cell_file(fsom_PB)
+
+#check that the number of rows (cells) in the file_PA is equal to the nº of rows (cells) in the flowSOM object
+
+length(file_PA) == nrow(fsom_PA$data)             
+table(file_PA)                                         
+
+length(file_PB) == nrow(fsom_PB$data)             
+table(file_PB)                                         
+
+#extract the metadata of each cell
+
+meta_PA <- readRDS(file.path(paths$metadata, "metadata_PA_20261102.rds"))
+meta_PB <- readRDS(file.path(paths$metadata, "metadata_PB_20261102.rds"))
+
+meta_PA$antiCSP_M3 <- factor(meta_PA$antiCSP_M3,
+                                 levels = c("Low", "High", "Control"))   
+
+meta_PA$sex <- factor(meta_PA$sex,
+                                 levels = c("F", "M"))   
+
+meta_PB$antiCSP_M3 <- factor(meta_PB$antiCSP_M3,
+                                 levels = c("Low", "High", "Control"))   
+
+meta_PB$sex <- factor(meta_PB$sex,
+                                 levels = c("F", "M"))   
+
+meta_PA <- tibble::rownames_to_column(meta_PA, var = "file_name")
+meta_PB<- tibble::rownames_to_column(meta_PB, var = "file_name")
+
+pal <- setNames(unname(pals::glasbey(nlevels(df_PA$cluster))), levels(df_PA$cluster))
+
+#function to perform UMAP on the data stored in the FlowSOM object
+
+umap_df <- function(fsom, mclusters, meta_table, channels = NULL,
+                    n_per_sample = NULL, seed = 42,
+                    n_neighbors = 15, min_dist = 0.3) {
+  set.seed(seed)
+  
+  mk <- intersect(colnames(fsom$data), channels)
+  file <- cell_file(fsom)
+  clusters <- FlowSOM::GetClusters(fsom)              
+  stopifnot(length(file) == nrow(fsom$data), length(mclusters) == nrow(fsom$data),
+            length(clusters) == nrow(fsom$data))
+
+  # cells to use: all of them, or the same number per sample
+  if (is.null(n_per_sample)) {
+    idx <- seq_len(nrow(fsom$data))
+  } else {
+    idx <- sort(unlist(lapply(split(seq_along(file), file),
+                              function(i) sample(i, min(n_per_sample, length(i))))))
+  }
+
+  um <- uwot::umap(fsom$data[idx, mk, drop = FALSE],
+                   n_neighbors = n_neighbors, min_dist = min_dist,
+                   n_threads = 1, seed = seed)
+
+  out <- tibble(UMAP1 = um[, 1], UMAP2 = um[, 2],
+         metacluster = factor(mclusters[idx]),
+         cluster     = factor(clusters[idx]),
+         file        = file[idx]) %>%
+    left_join(meta_table, by = c("file" = "file_name")) %>%
+    bind_cols(as_tibble(fsom$data[idx, mk, drop = FALSE]))
+
+  if (nrow(out) != length(idx)) warning("Join changed the number of rows: duplicated file names in meta_table?")
+  if (anyNA(out[[setdiff(names(meta_table), "file_name")[1]]]))
+    warning("Some cells have no metadata: file names don't match.")
+  out
+}
+
+df_PA <- umap_df(fsom_PA, mclusters_PA,meta_PA, channels_PA)
+df_PA_sub<- umap_df(fsom_PA, mclusters_PA,meta_PA, channels_PA, 3000)
+
+df_PB <- umap_df(fsom_PB, mclusters_PB,meta_PB, channels_PB)
+df_PB_sub<- umap_df(fsom_PB, mclusters_PB,meta_PB, channels_PB, 3000)
+
+saveRDS(df_PA, file= file.path(paths$rds,"umap_PA_allmarkers_allcells_20261102.RDS"))
+saveRDS(df_PA_sub, file= file.path(paths$rds,"umap_PA_allmarkers_subcells_20261102.RDS"))
+
+saveRDS(df_PB, file= file.path(paths$rds,"umap_PB_allmarkers_allcells_20261102.RDS"))
+saveRDS(df_PB_sub, file= file.path(paths$rds,"umap_PB_allmarkers_subcells_20261102.RDS"))
+
+rm(df_PA, df_PB, fsom_PA, fsom_PB, file_PA, file_PB)
+gc()
+
+#load the UMAP objects if starting from here
+
+# umap_PA<- readRDS(file.path(paths$rds, "umap_PA_allmarkers_allcells_20261102.RDS"))
+umap_PA_sub<- readRDS(file.path(paths$rds, "umap_PA_allmarkers_subcells_20261102.RDS"))
+# 
+# umap_PB<- readRDS(file.path(paths$rds, "umap_PB_allmarkers_allcells_20261102.RDS"))
+umap_PB_sub<- readRDS(file.path(paths$rds, "umap_PB_allmarkers_subcells_20261102.RDS"))
+
+plot_umap_nodes <- function(df, color_by = "metacluster", node_col = "cluster",
+                            palette = NULL, nodes = NULL, min_cells = 0,
+                            label_size = 2.5, title = NULL) {
+
+  df[[color_by]] <- factor(df[[color_by]])
+  if (is.null(palette)) palette <- unname(pals::glasbey(nlevels(df[[color_by]])))
+  df_plot <- df[sample(nrow(df)), ]
+
+  p <- ggplot(df_plot, aes(UMAP1, UMAP2, colour = .data[[color_by]])) +
+    geom_point(size = 0.3, alpha = 0.5) +
+    scale_colour_manual(values = palette) +
+    guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1), ncol = 2)) +
+    labs(title = title, colour = color_by) + theme_bw()
+
+  if (!is.null(node_col)) {
+    centers <- df %>% group_by(.data[[node_col]]) %>%
+      summarise(UMAP1 = median(UMAP1), UMAP2 = median(UMAP2), n = n(), .groups = "drop")
+    if (!is.null(nodes)) centers <- centers %>% dplyr::filter(.data[[node_col]] %in% nodes)
+    centers <- centers %>% dplyr::filter(n >= min_cells)
+    p <- p + ggrepel::geom_text_repel(data = centers,
+                                      aes(UMAP1, UMAP2, label = .data[[node_col]]),
+                                      colour = "black", size = label_size,
+                                      max.overlaps = Inf, segment.size = 0.2,
+                                      inherit.aes = FALSE)
+  }
+  p
+}
+
+plot_umap_nodes(umap_PB_sub, "metacluster")                       
+plot_umap_nodes(umap_PB_sub, "antiCSP_M3", node_col = NULL)      
+      
+plot_umap_nodes(umap_PB_sub, "sex", node_col = NULL)      
+
+pd <- pData(parameters(flowset_PA_t[[1]]))
+label_map <- setNames(pd$desc, pd$name)      
+label_map <- label_map[names(label_map) %in% channels_PA]
+
+#add new nomenclature to the umap clusters
+
+labels_PA<- c("1"= "Non-classical Mo Slan-",
+              "2"= "DCs 1",
+              "3"= "Unclassified",
+              "4"= "Non-classical Mo Slan+ CX3CR1-",
+              "5"= "B cells/DCs",
+              "6"= "CD14dim Classical Mo",
+              "7"= "Monocyte-like DCs",
+              "8"= "DCs 2",
+              "9"= "Granulocytes",
+              "10"= "Intermediate Mo CD16dim",
+              "11"= "Basophils",
+              "12"= "Platelets",
+              "13"= "Classical Mo",
+              "14"= "Non-classical Mo Slan+ CX3CR1+",
+              "15"= "Intermediate Mo")
+
+labels_PB<- c("1"= "DCs 2",
+              "2"= "CD14dim Classical Mo 1",
+              "3"= "Classical Mo",
+              "4"= "Intermediate Mo",
+              "5"= "CD14dim Classical Mo 5",
+              "6"= "DCs 3",
+              "7"= "Intermediate Mo CD16dim",
+              "8"= "DCs 1", 
+              "9"= "CD14dim CCR2- Classical Mo 1",
+              "10"= "B cells/DCs",
+              "11"= "Non-classical Mo Slan+ CX3CR1-",
+              "12"= "Non-classical Mo Slan- CD86+",
+              "13"= "Non-classical Mo Slan+ CX3CR1+",
+              "14"= "CD14dim CCR2- Classical Mo 2",
+              "15"= "Non-classical Mo Slan- CD86-")
+
+marker_list_PA <- list(
+  "BV650-A"           = "CD11b",
+  "BV570-A"           = "CD14",
+  "BV421-A"           = "CD16",
+  "BUV805-A"          = "CD32",
+  "BUV563-A"          = "CD35",
+  "BV605-A"           = "CD36",
+  "VioGreen-A"        = "CD64",
+  "BUV496-A"          = "CD89",
+  "BUV395-A"          = "CD163",
+  "PE-Cy5.5-A"        = "BAFF",
+  "APC_Fire 750-A"    = "CCR2",
+  "BUV737-A"          = "CX3CR1",
+  "BUV615-A"          = "FcER1",
+  "BV480-A"           = "HLA-DR",
+  "Alexa Fluor 647-A" = "S100A8",
+  "VioBlue-A"         = "Slan",
+  "RY586-A"           = "TLR2"
+)
+
+marker_list_PB <- list(
+ "PE_Dazzle 594-A"          = "CD11b_act",
+  "BV570-A"           = "CD14",
+  "BV421-A"           = "CD16",
+  "PE_Fire 810-A"     = "CD40",
+  "RB780-A"           = "CD54",
+  "APC_Fire 810-A"    = "CD62L",
+  "RY610-A"           = "CD86",
+  "PE-Cy7-A"          = "CCR1",
+  "APC_Fire 750-A"    = "CCR2",
+  "BUV737-A"          = "CX3CR1",
+  "BV785-A"           = "CXCR4",
+  "BV750-A"           = "PD-1",
+  "RB705-A"           = "PD-L1",
+  "VioBlue-A"         = "Slan",
+  "RY586-A"           = "TLR2",
+  "VioBlue-A"         = "Slan",
+  "RB744-A"           = "TLR4"
+)
+
+umap_PA_sub$metacluster_label <- unname(labels_PA[as.character(umap_PA_sub$metacluster)])
+
+umap_PB_sub$metacluster_label <- unname(labels_PB[as.character(umap_PB_sub$metacluster)])
+
+umap_PA<- umap_PA_sub %>% 
+  dplyr::filter(antiCSP_M3!="Control")
+
+umap_PB<- umap_PB_sub %>% 
+  dplyr::filter(antiCSP_M3!="Control")
+
+# function to plot the expression of markers in the UMAP, it changes the values below the 1 and above the 99 percentile for better visualization
+#labels of the markers are the fluorochromes not the actual marker name
+#label fun is the function used to calculate the position of the labels through the UMAP values, it can be median or mean depending on where we want 
+#the labels
+
+umap_PA <- umap_PA %>%
+  rename(any_of(setNames(names(marker_list_PA), unlist(marker_list_PA))))
+
+umap_PB <- umap_PB %>%
+  rename(any_of(setNames(names(marker_list_PB), unlist(marker_list_PB))))
+
+plot_umap_marker <- function(df, marker,
+                             split_by = NULL,      
+                             ncol = NULL,         
+                             size = 0.2,
+                             clip = c(0.01, 0.99),
+                             title = NULL,        
+                             cluster_col = NULL,   
+                             label_size = 3,
+                             label_fun = median,   
+                             save_path = NULL,    
+                             panel_width = 4, panel_height = 4, dpi = 300) {
+
+  stopifnot(length(marker) == 1, marker %in% names(df))
+  stopifnot(length(split_by) <= 2)
+
+  for (v in split_by) {
+    df <- df[!is.na(df[[v]]), ]
+    df[[v]] <- droplevels(as.factor(df[[v]]))
+  }
+
+    centroids <- NULL
+  if (!is.null(cluster_col)) {
+    centroids <- df %>%
+      dplyr::filter(!is.na(.data[[cluster_col]])) %>%
+      group_by(cluster_label = .data[[cluster_col]]) %>%
+      summarise(UMAP1 = label_fun(UMAP1),
+                UMAP2 = label_fun(UMAP2),
+                .groups = "drop")
+  }
+
+  q <- quantile(df[[marker]], clip, na.rm = TRUE)
+  df$value <- pmin(pmax(df[[marker]], q[1]), q[2])
+
+  df <- df %>% arrange(value)
+
+  p <- ggplot(df, aes(UMAP1, UMAP2, colour = value)) +
+    geom_point(size = size) +
+    scale_colour_viridis_c(option = "magma") +
+    labs(colour = "Expression", title = title %||% marker) +
+    theme_bw() +
+    theme(strip.background = element_rect(fill = "grey90"),
+          plot.title = element_text(face = "bold"))
+
+  n_panels <- 1
+  n_col <- 1
+  n_row <- 1
+
+  if (length(split_by) == 1) {
+    n_panels <- nlevels(df[[split_by]])
+    if (is.null(ncol)) ncol <- ceiling(sqrt(n_panels))
+    p <- p + facet_wrap(split_by, ncol = ncol)
+    n_col <- min(ncol, n_panels)
+    n_row <- ceiling(n_panels / ncol)
+  } else if (length(split_by) == 2) {
+    
+    p <- p + facet_grid(rows = split_by[1], cols = split_by[2])
+    n_row <- nlevels(df[[split_by[1]]])
+    n_col <- nlevels(df[[split_by[2]]])
+  }
+
+if (!is.null(centroids)) {
+  p <- p + geom_shadowtext(
+    data = centroids,
+    aes(UMAP1, UMAP2, label = cluster_label),
+    inherit.aes = FALSE,
+    size = label_size,
+    fontface = "bold",
+    colour = "black",
+    bg.colour = "white",
+    bg.r = 0.15          # halo thickness
+  )
+}
+ 
+  if (!is.null(save_path)) {
+    ggsave(save_path, p,
+           width  = panel_width  * n_col + 1.5, 
+           height = panel_height * n_row,
+           dpi = dpi, limitsize = FALSE)
+  }
+
+  p
+}
+
+plot_umap_marker(umap_PA, "S100A8", split_by = "antiCSP_M3",
+                  cluster_col = "metacluster_label", label_fun= mean)
+
+plot_umap_marker(umap_PB, "CD14", split_by = "antiCSP_M3",
+                  cluster_col = "metacluster_label", label_fun= mean)
+
+plot_umap_markers(df_PB_sub, channels_PB, label_map = label_map_PB)
+
+plot_umap_highlight <- function(df, var, group, colour = "#D55E00", title = NULL,
+                                color_by = NULL, palette = NULL) {
+  df <- df[sample(nrow(df)), ]
+  in_grp  <- df[[var]] == group
+  bg      <- df[!in_grp, ]
+  fg      <- df[in_grp, ]
+
+  p <- ggplot() +
+    geom_point(data = bg, aes(UMAP1, UMAP2), colour = "grey85", size = 0.3, alpha = 0.5)
+
+  if (is.null(color_by)) {
+    # all highlighted cells in one colour
+    p <- p + geom_point(data = fg, aes(UMAP1, UMAP2), colour = colour, size = 0.3, alpha = 0.6)
+  } else {
+    # highlighted cells coloured by another variable, e.g. metacluster
+    fg[[color_by]] <- factor(fg[[color_by]])
+    if (is.null(palette)) palette <- unname(pals::glasbey(nlevels(fg[[color_by]])))
+    p <- p + geom_point(data = fg, aes(UMAP1, UMAP2, colour = .data[[color_by]]),
+                        size = 0.3, alpha = 0.6) +
+      scale_colour_manual(values = palette) +
+      guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1), ncol = 2))
+  }
+
+  p + labs(title = title %||% paste(var, "=", group)) + theme_bw()
+}
+
+plot_umap_highlight(df_PA_sub, "antiCSP_M3", "Control")    
+plot_umap_highlight(df_PA_sub, "antiCSP_M3", "High") 
+plot_umap_highlight(df_PA_sub, "antiCSP_M3", "Low") 
+
+#split umap by high and low responders
+
+umap_PA_high<- umap_PA_sub %>% 
+  dplyr::filter(antiCSP_M3=="High")
+
+umap_PA_low<- umap_PA_sub %>% 
+  dplyr::filter(antiCSP_M3=="Low")
+
+plot_umap_markers(umap_PA_high, channels_PA, label_map = label_map_PA)
+
+plot_umap_markers(umap_PA_low, channels_PA, label_map = label_map_PA)
+
+
+```
+
+```{r}
+
+#load the flowSOM objects to extract the counts and compare the proportions of each metacluster between groups
+#after exploring the marker expression in each metacluster, we can give them names
+# 
+fsom_PA<- readRDS(file.path(paths$rds, "fsom_PA_allmarkers_15MC_20261030.RDS"))
+fsom_PB<- readRDS(file.path(paths$rds, "fsom_PB_allmarkers_15MC_20261103.RDS"))
+
+labels_PA<- c("1"= "Non-classical Mo Slan-",
+              "2"= "DCs 1",
+              "3"= "Unclassified",
+              "4"= "Non-classical Mo Slan+ CX3CR1-",
+              "5"= "B cells/DCs",
+              "6"= "CD14dim Classical Mo",
+              "7"= "Monocyte-like DCs",
+              "8"= "DCs 2",
+              "9"= "Granulocytes",
+              "10"= "Intermediate Mo CD16dim",
+              "11"= "Basophils",
+              "12"= "Platelets",
+              "13"= "Classical Mo",
+              "14"= "Non-classical Mo Slan+ CX3CR1+",
+              "15"= "Intermediate Mo")
+
+labels_PB<- c("1"= "DCs 2",
+              "2"= "CD14dim Classical Mo 1",
+              "3"= "Classical Mo",
+              "4"= "Intermediate Mo",
+              "5"= "CD14dim Classical Mo 5",
+              "6"= "DCs 3",
+              "7"= "Intermediate Mo CD16dim",
+              "8"= "DCs 1", 
+              "9"= "CD14dim CCR2- Classical Mo 1",
+              "10"= "B cells/DCs",
+              "11"= "Non-classical Mo Slan+ CX3CR1-",
+              "12"= "Non-classical Mo Slan- CD86+",
+              "13"= "Non-classical Mo Slan+ CX3CR1+",
+              "14"= "CD14dim CCR2- Classical Mo 2",
+              "15"= "Non-classical Mo Slan- CD86-")
+
+
+fsom_PA_up<- UpdateMetaclusters(fsom_PA,
+                                newLabels = labels_PA)
+
+fsom_PB_up<- UpdateMetaclusters(fsom_PB,
+                                newLabels = labels_PB)
+
+saveRDS(fsom_PA_up, file= file.path(paths$rds,"fsom_PA_allmarkers_renamed_20261107.RDS"))
+saveRDS(fsom_PB_up, file= file.path(paths$rds,"fsom_PB_allmarkers_renamed_20261107.RDS"))
+
+rm(fsom_PA, fsom_PB)
+gc()
+
+```
+
+```{r}
+
+#extract fcs files with the flowsom clustering information written into them to explore and validate the clusters in flowjo
+
+files_PA<- list.files(file.path(paths$raw, "FCS_without_WaveformPresent"), pattern= "PA", full.names= TRUE)
+files_PB<- list.files(file.path(paths$raw, "FCS_without_WaveformPresent"), pattern= "PB", full.names= TRUE)
+
+FlowSOM::SaveClustersToFCS(fsom = fsom_PA_up,
+                           originalFiles = files_PA,
+                           outputDir = file.path("data/after_fsom"),
+                           truncate_max_range = FALSE)
+
+
+FlowSOM::SaveClustersToFCS(fsom = fsom_PB_up,
+                           originalFiles = files_PB,
+                           outputDir = file.path("data/after_fsom"),
+                           truncate_max_range = FALSE)
+
+#ff2<- read.FCS(file.path(paths$fsom, "PA_TLR2+_A01-1_FlowSOM.fcs"), truncate_max_range= FALSE)
+
+```

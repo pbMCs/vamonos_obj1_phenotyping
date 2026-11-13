@@ -1,34 +1,225 @@
 ---
-title: "01_QC_cleanup"
-output: html_document
- toc: true
+title: "Vamonos Obj1B Phenotyping QC and cleanup"
+author: "Mar"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
     code_folding: hide
     self_contained: true
-date: "2026-10-22"
+editor_options: 
+  chunk_output_type: console
 ---
 
-``````{r setup, include=FALSE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 source(here::here("R", "00_setup.R"))
 ```
 
+This analysis includes the **Objective 1B** samples from the **VaMonos** project, ran on 01/07/2026
 
-## R Markdown
+Samples were thawed, counted and divided into those for the single cell CITE-Seq experiment and flow cytometry staining, the phenotyping monocyte panel was divided between panel A and panel B, which include the following markers:
+  
+  **Backbone:** LiveDead stain, Dump channel (CD3, CD19, CD335), CD14, CD16, TLR2, Slan, CX3CR1, CCR2 
+  
+  **Panel A:** CD89, CD32, CD64, FcER1a, CD35, CD11b, S100A8, CD163, CD36, HLA-DR, BAFF
+  
+  **Panel B:** CCR1, CXCR4, CD11b_activation_epitope, PD-1, PD-L1, CD40, CD86, TLR4, CD54, CD62L
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+After unmixing both panels in FACSChorus, fcs files were exported and gating was done in this order:
 
-```{r cars}
-summary(cars)
+Time -> Singlets (Radial moment vs Eccentricity) -> Live cells -> TLR2+, Dump channel- 
+
+This last TLR2+ pop was exported as new fcs files and are what will be processed in this code
+
+It is important to know that the newly exported fcs files, look different flowjo if using the Software unmixed parameters
+
+(because it's like double unmixing)
+
+# Data loading and transformation
+
+First, we check the scale of the parameters. There is a waveformpresent parameter that is not in all fcs files
+
+So we remove it from the fcs files to be able to merge them all, and create new modified fcs files that are in data/raw/FCS_without_WaveformPresent
+
+```{r, include=FALSE}
+
+#Load one of the fcs files to check if the parameters are unmixed 
+#This might not work on fcs files from other cytometers because the parameter names might be different
+#If it has an unmixing matrix applied it means the files are unmixed
+
+ff <- read.FCS(
+  file.path(paths$raw, "PA_TLR2+_A01-1.fcs"),
+  truncate_max_range = FALSE
+)
+
+ff@description[["BDSPECTRAL UNMIXED"]]
+ff@description[["BDSPECTRAL MATRIX NAME"]]
+
+# Identify and create lists of the unmixed FCS files for each panel
+
+fcs_files_PA <- list.files(paths$raw, pattern = "PA", full.names = TRUE)
+fcs_files_PB <- list.files(paths$raw, pattern = "PB", full.names = TRUE)
+
+# since we realized we could not load all the fcs files into a flowset due to the
+# different number of parameters, we create a function to remove the extra parameter from all the fcs files
+# the function first checks if the fixed fcs files are already in the folder to not create them again
+
+new_fcs_files_dir <- file.path("data", "raw", "FCS_without_WaveformPresent_2")
+dir.create(new_fcs_files_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Function to remove WaveformPresent and save corrected FCS files
+
+fix_fcs_files <- function(fcs_files, output_dir) {
+
+  fixed_files <- file.path(output_dir, basename(fcs_files))
+
+  for (i in seq_along(fcs_files)) {
+  
+    if (file.exists(fixed_files[i])) {
+      message("Already processed: ", basename(fcs_files[i]))
+      next
+    }
+
+    ff <- read.FCS(
+      fcs_files[i],
+      transformation = FALSE,
+      truncate_max_range = FALSE
+    )
+
+    channels <- colnames(exprs(ff))
+
+    if ("WaveformPresent" %in% channels) {
+      ff <- ff[, channels != "WaveformPresent"]
+
+      message("Removed WaveformPresent from: ",
+              basename(fcs_files[i]))
+    } else {
+      message("Parameter not present: ",
+              basename(fcs_files[i]))
+    }
+
+    write.FCS(ff, filename = fixed_files[i])
+  }
+
+  return(fixed_files)
+}
+
+fcs_files_PA_fixed <- fix_fcs_files(fcs_files_PA, new_fcs_files_dir)
+fcs_files_PB_fixed <- fix_fcs_files(fcs_files_PB, new_fcs_files_dir)
+
+#when loading fcs files, it's important to set the truncation and transformation arguments to FALSE, or the functions apply their own transformations
+
+PA_cytoset <- load_cytoset_from_fcs(
+  fcs_files_PA_fixed,
+  truncate_max_range = FALSE,
+  transformation = FALSE
+)
+
+PA_GatingSet <- GatingSet(PA_cytoset)
+
+PB_cytoset <- load_cytoset_from_fcs(
+  fcs_files_PB_fixed,
+  truncate_max_range = FALSE,
+  transformation = FALSE
+)
+
+PB_GatingSet <- GatingSet(PB_cytoset)
+
 ```
 
-## Including Plots
+Add necessary study metadata to the fcs files
 
-You can also embed plots, for example:
+```{r}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+#create a structure for the metadata dataframe from the information stored in the fcs file name (ID, Panel)
+
+metadataPA <- data.frame(
+  name = basename(fcs_files_PA_fixed),
+  ID = sub(".*-([0-9]{1,2})\\.fcs$", "\\1",
+           basename(fcs_files_PA_fixed)),
+  panel = substr(basename(fcs_files_PA_fixed), 1, 2),
+  row.names = basename(fcs_files_PA_fixed)
+)
+
+metadataPB <- data.frame(
+  name = basename(fcs_files_PB_fixed),
+  ID = sub(".*-([0-9]{1,2})\\.fcs$", "\\1",
+           basename(fcs_files_PB_fixed)),
+  panel = substr(basename(fcs_files_PB_fixed), 1, 2),
+  row.names = basename(fcs_files_PB_fixed)
+)
+
+#read dataframe with necessary information (it needs to contain a matching column with the fcs files in order to merge, in this case the ID column)
+
+obj1_file_path<-file.path(paths$metadata,"20261021_vamonos_obj1_phenotyping_data.xlsx")
+
+obj1_file_data<- readxl::read_xlsx(obj1_file_path)
+
+UpdatedMetadata_PA <- merge(metadataPA, obj1_file_data, by= "ID", all.x= TRUE)
+UpdatedMetadata_PB <- merge(metadataPB, obj1_file_data, by= "ID", all.x= TRUE)
+
+#to update the metadata stored in the fcs files, we need to have the fcs file name as the rownames of the metadata
+
+rownames(UpdatedMetadata_PA) <- UpdatedMetadata_PA$name
+rownames(UpdatedMetadata_PB) <- UpdatedMetadata_PB$name
+
+pData(PA_GatingSet) <- UpdatedMetadata_PA
+pData(PB_GatingSet) <- UpdatedMetadata_PB
+pData(PA_GatingSet)
+pData(PB_GatingSet)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+After the metadata, check the parameters and marker names, and how do they look untransformed.
+We apply the biexponential transformation
+
+```{r}
+
+#colnames(PA_GatingSet)
+#markernames(PA_GatingSet)
+
+#we check if the samples have any transformation applied, by the gh_get_transformations function and also visually by plotting some of the parameters
+
+gh_get_transformations(PA_GatingSet[[1]])
+
+ggcyto(PA_GatingSet[1], subset="root",
+ aes(x="FSC-A", y="SSC (Violet)-A")) + geom_hex(bins=100)
+
+ggcyto(PA_GatingSet[1], subset="root",
+ aes(x="CD14-A", y="CD16-A")) + geom_hex(bins=100)
+
+#obtain a list of the fluorochrome channels that we are interested in 
+
+fluor_channels_PA <- colnames(PA_GatingSet)[!grepl("FSC|SSC|Time|Imaging|Violet|Intensity|Moment|Dump channel FITC|Saturated|Sorted|Row|Column|Img|)-A|)-H|Phase|SpectralEvent|MergedTrigger", colnames(PA_GatingSet))]
+
+#estimate the necessary logicle(biexponential) transformations to apply to each parameter and apply them to the samples
+#multiple samples can be used for this estimation, if the result is not satisfactory
+
+tf_PA<- estimateLogicle(PA_GatingSet[[1]], fluor_channels_PA)
+
+PA_GatingSet_t<- transform(PA_GatingSet, tf_PA)
+
+ggcyto(PA_GatingSet_t[1], subset="root",
+ aes(x="BV421-A", y="BV570-A")) + geom_hex(bins=100)
+
+fluor_channels_PB <- colnames(PB_GatingSet)[!grepl("FSC|SSC|Time|Imaging|Violet|Intensity|Moment|Dump channel FITC|Saturated|Sorted|Row|Column|Img|)-A|)-H|Phase|SpectralEvent|MergedTrigger", colnames(PB_GatingSet))]
+
+tf_PB<- estimateLogicle(PB_GatingSet[[1]], fluor_channels_PB)
+
+PB_GatingSet_t<- transform(PB_GatingSet, tf_PB)
+
+ggcyto(PB_GatingSet_t[1], subset="root",
+ aes(x="BV421-A", y="BV570-A")) + geom_hex(bins=100)
+
+store_fcs_PA<- file.path("data", "after QC", "Panel A")
+store_fcs_PB<- file.path("data", "after QC", "Panel B")
+
+save_gs(PA_GatingSet_t, store_fcs_PA)
+save_gs(PB_GatingSet_t, store_fcs_PB)
+
+```
+
+

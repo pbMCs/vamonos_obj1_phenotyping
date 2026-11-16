@@ -17,6 +17,13 @@ library(ggpubr)
 library(pheatmap)
 library(ggrepel)  
 library(shadowtext)
+library(readxl)
+library(HDF5Array)
+library(vegan)
+library(compositions)
+library(ggpubr)
+library(broom)
+
 
 # 2. Define project paths
 paths <- list(
@@ -25,7 +32,8 @@ paths <- list(
   metadata = here("data", "metadata"),
   rds      = here("output", "rds"),
   figures  = here("output", "figures"),
-  fsom= here("data", "after_fsom")
+  fsom= here("data", "after_fsom"),
+  output= here("output")
 )
 
 # 3. Reproducibility

@@ -40,7 +40,7 @@ meta_PB$sex <- factor(meta_PB$sex,
                                  levels = c("F", "M"))   
 
 meta_PA <- tibble::rownames_to_column(meta_PA, var = "file_name")
-meta_PB<- tibble::rownames_to_column(meta_PB, var = "file_name")`
+meta_PB<- tibble::rownames_to_column(meta_PB, var = "file_name")
 
 ```
 
@@ -55,7 +55,7 @@ cell_file <- function(fsom) {
 
 counts_PA_up <- tibble(file = cell_file(fsom_PA_up),
                  metacluster = factor(GetMetaclusters(fsom_PA_up))) %>%
-  count(file, metacluster, .drop = FALSE) %>%               
+  dplyr::count(file, metacluster, .drop = FALSE) %>%               
   left_join(meta_PA, by = c("file" = "file_name"))
 
 #dataframe showing the total cells coming from each sample in the flowsom, not used later but to check for consistency
@@ -104,7 +104,7 @@ lab_PA <- setNames(paste0(n_per_group_PA$antiCSP_M3, "\n(n = ", n_per_group_PA$n
 
 counts_PB_up <- tibble(file = cell_file(fsom_PB_up),
                  metacluster = factor(GetMetaclusters(fsom_PB_up))) %>%
-  count(file, metacluster, .drop = FALSE) %>%               
+  dplyr::count(file, metacluster, .drop = FALSE) %>%               
   left_join(meta_PB, by = c("file" = "file_name"))
 
 #dataframe showing the total cells coming from each sample in the flowsom, not used later but to check for consistency
@@ -526,4 +526,166 @@ wrap_plots(plots_PA, ncol = 4)
 plots_PB<-plot_metaclusters(fsom_PB_high,CCR1CD16)
 wrap_plots(plots_PB, ncol = 4)    
 
+```
+
+Analyse the relationships of the metacluster proportions in each sample group with their antibody levels at M3
+
+```{r}
+#load antibody data
+
+abs <- read.csv(file.path(paths$metadata,"VAMONOS_obj1B_antibody_outcomes.csv")) %>%
+  select(-X) %>%
+  dplyr::rename(ID = sample) %>%
+  mutate(
+    analyte    = as.factor(analyte),
+    responder = as.factor(responder)
+  )%>%
+  mutate(ID = str_remove(ID, "A"))
+
+props_PA_up<- props_PA_up[,-c(4)]
+props_PB_up<- props_PB_up[,-c(4)]
+
+out_dir <- file.path(paths$output)
+analytes <- levels(abs$analyte)
+
+analytes <- c("IgG_CSP_Cterm_M3", "IgG_CSP_FL_M3", "IgG_CSP_NANP_M3", 
+              "IgG_CSP_Cterm_M3M20", "IgG_CSP_FL_M3M20", "IgG_CSP_NANP_M3M20")
+
+#function to perform spearman correlations between the cluster proportions and the antibody analytes, and linear regression: for each cluster, it measures how antibody level changes as that cluster becomes more abundant, while accounting for sex and age.
+
+run_analyte <- function(an, abs, props, out_dir, rho_cutoff = 0.4) {
+
+  message("\n===== Analyte: ", an, " =====")
+
+  pdf_file <- file.path(out_dir, paste0(an, "_clusters_lineage.pdf"))
+  pdf(file = pdf_file, width = 8, height = 6)
+  on.exit(dev.off(), add = TRUE)
+
+  abs_an <- abs %>%
+    dplyr::filter(analyte == an) %>%
+    select(ID, value, responder, age, sex)
+
+  df_long <- props %>%
+    inner_join(abs_an, by = "ID")
+
+  id_order <- df_long %>%
+    distinct(ID, value) %>%
+    arrange(value) %>%
+    pull(ID)
+  df_long <- df_long %>% mutate(ID = factor(ID, levels = id_order))
+
+  cluster_corr <- df_long %>%
+    group_by(metacluster) %>%
+    summarise(cor = cor(prop, value, method = "spearman"), .groups = "drop") %>%
+    arrange(desc(abs(cor)))
+
+  top_clusters <- cluster_corr %>% dplyr::filter(abs(cor) > rho_cutoff)
+
+  if (nrow(top_clusters) > 0) {
+    print(
+      df_long %>%
+        dplyr::filter(metacluster %in% top_clusters$metacluster) %>%
+        ggplot(aes(x = value, y = prop)) +
+        geom_point() +
+        stat_cor(method = "spearman") +
+        geom_smooth(method = "lm", se = FALSE) +
+        facet_wrap(~metacluster, scales = "free_y") +
+        labs(x = an, title = paste("Top clusters vs", an)) +
+        theme_bw()
+    )
+  } else {
+    plot.new()
+    text(0.5, 0.5,
+         paste0("No clusters with |rho| > ", rho_cutoff, "\nfor analyte: ", an),
+         adj = c(0.5, 0.5), cex = 1.2)
+  }
+
+  # ── CLR + lm: cell proportion -> antibody level ──────────────────────────
+  covars <- df_long %>%
+    distinct(ID, value, sex, age, responder) %>%
+    mutate(
+      sex       = as.factor(sex),
+      responder = factor(responder, levels = c("Low", "High"))
+    )
+
+  df_wide <- df_long %>%
+    select(ID, metacluster, prop) %>%
+    distinct() %>%
+    pivot_wider(names_from = metacluster, values_from = prop,
+                values_fill = 0)
+
+  clr_matrix <- as.data.frame(clr(df_wide[, -1] + 1e-6))
+  clr_matrix$ID <- df_wide$ID
+
+  clr_long <- clr_matrix %>%
+    pivot_longer(-ID, names_to = "metacluster", values_to = "CLR") %>%
+    left_join(covars, by = "ID") %>%
+    tidyr::drop_na(value, CLR, sex, age)   # lm would drop these silently anyway
+
+  results_an <- clr_long %>%
+    group_by(metacluster) %>%
+    group_modify(~ {
+      mod <- lm(scale(value) ~ scale(CLR) + sex + age, data = .x)
+      tidy(mod, conf.int = TRUE) %>%
+        dplyr::filter(term == "scale(CLR)")
+    }) %>%
+    ungroup() %>%
+    mutate(
+      analyte     = an,
+      p.adj       = p.adjust(p.value, method = "BH"),   # within this analyte
+      significant = p.adj < 0.05,
+      direction   = ifelse(estimate > 0, "positive", "negative")
+    )
+
+  # Order clusters by estimate for the forest plot
+  results_an <- results_an %>%
+    mutate(Cluster = factor(metacluster,
+                            levels = metacluster[order(estimate)]))
+
+  # ── Forest plot ──────────────────────────────────────────────────────────
+  print(
+    ggplot(results_an, aes(x = estimate, y = Cluster,
+                           color = direction, alpha = significant)) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+      geom_errorbar(aes(xmin = conf.low, xmax = conf.high),
+                    orientation = "y", width = 0.3) +
+      geom_point(aes(shape = significant), size = 2.5) +
+      scale_color_manual(values = c(positive = "#E76F51", negative = "#264653"),
+                         name = "Direction") +
+      scale_alpha_manual(values = c("TRUE" = 1, "FALSE" = 0.3),
+                         name = "FDR < 0.05") +
+      scale_shape_manual(values = c("TRUE" = 16, "FALSE" = 1),
+                         name = "FDR < 0.05") +
+      labs(
+        x        = "Regression coefficient (95% CI)\nadjusted by sex and age",
+        y        = "Cluster",
+        title    = paste("CLR + lm -", an),
+        subtitle = "Cell cluster proportion -> Antibody level"
+      ) +
+      theme_bw()
+  )
+
+  message("PDF saved: ", pdf_file)
+  results_an
+}
+
+# ── Run all analytes ─────────────────────────────────────────────────────────
+all_lm_clr <- list()
+
+for (an in analytes) {
+  all_lm_clr[[an]] <- tryCatch(
+    run_analyte(an, abs = abs, props = props_PA_up, out_dir = out_dir),
+    error = function(e) {
+      message("FAILED for ", an, ": ", conditionMessage(e))
+      NULL
+    }
+  )
+}
+
+# ── Combined table with FDR across ALL analytes ──────────────────────────────
+all_lm_clr_df <- bind_rows(all_lm_clr) %>%
+  mutate(
+    p.adj.global      = p.adjust(p.value, method = "BH"),
+    significant.global = p.adj.global < 0.05
+  )
 ```

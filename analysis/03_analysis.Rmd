@@ -545,7 +545,9 @@ abs <- read.csv(file.path(paths$metadata,"VAMONOS_obj1B_antibody_outcomes.csv"))
 props_PA_up<- props_PA_up[,-c(4)]
 props_PB_up<- props_PB_up[,-c(4)]
 
-out_dir <- file.path(paths$output)
+out_dir_PA <- file.path(paths$output, "Panel A")
+out_dir_PB <- file.path(paths$output, "Panel B")
+
 analytes <- levels(abs$analyte)
 
 analytes <- c("IgG_CSP_Cterm_M3", "IgG_CSP_FL_M3", "IgG_CSP_NANP_M3", 
@@ -674,7 +676,7 @@ all_lm_clr <- list()
 
 for (an in analytes) {
   all_lm_clr[[an]] <- tryCatch(
-    run_analyte(an, abs = abs, props = props_PA_up, out_dir = out_dir),
+    run_analyte(an, abs = abs, props = props_PA_up, out_dir = out_dir_PA),
     error = function(e) {
       message("FAILED for ", an, ": ", conditionMessage(e))
       NULL
